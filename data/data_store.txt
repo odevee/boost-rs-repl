@@ -1,2 +1,0 @@
-interaction data file: interaction.pkl from KEGG
-auxiliary data file: auxiliary.pkl from KEGG and PubChem

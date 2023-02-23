@@ -52,9 +52,9 @@ class Recommender(torch.nn.Module):
         self.ec_predictor = torch.nn.ModuleList()
         for ec_dim in [7, 68, 231]:
             self.ec_predictor.append(MLPModel(input_dim=hidden_dim, hidden_dim=hidden_dim, output_dim=ec_dim, dropout=dropout, sigmoid_last_layer=False))
-
+        # multi-task: ko
         self.ko_predictor = MLPModel(input_dim=hidden_dim, hidden_dim=hidden_dim, output_dim=5575, dropout=dropout, sigmoid_last_layer=True)
-
+        # MLP co-embedding of enzyme and substrate from input embedding
         self.fc1 = torch.nn.Sequential(
             torch.nn.Linear(hidden_dim * 2, hidden_dim),
             torch.nn.ReLU()
@@ -199,8 +199,10 @@ def train():
         # multi-task: rpair
         loss_rpair = contrastive_loss(rpairs_pos[:, :2], num_compound, fp=True)
 
-        # multi-task: ko
-        # loss_enzyme_ko = contrastive_loss(enzyme_ko, num_enzyme, fp=False)
+        # multi-task: ko        
+        # BUG: they changed the KO loss from the paper, I think? -> not contrastive!
+        # TODO: think about what would be an appropriate loss, also considering it's a multi-label problem
+        # loss_enzyme_ko = contrastive_loss(enzyme_ko, num_enzyme, fp=False) 
         loss_ko_mf = weighted_binary_cross_entropy(model.predict_ko(torch.arange(num_enzyme).to(device), mf=True), enzyme_ko_hot, weights=[1.0, 1.0])
         loss_ko_mlp = weighted_binary_cross_entropy(model.predict_ko(torch.arange(num_enzyme).to(device), mf=False), enzyme_ko_hot, weights=[1.0, 1.0])
         loss_enzyme_ko = loss_ko_mf + loss_ko_mlp
