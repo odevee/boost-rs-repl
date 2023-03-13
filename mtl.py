@@ -166,85 +166,155 @@ def train():
     best_valid_map = 0.0
     best_model_state = None
 
-    # train
-    model.train() # TODO : ?
-    for t in (range(args.iterations)):
-        t = time.time()
-        print(t)
-        print('ITERATION {}'.format(t))
-        # model.train()
-
-        # compute interaction loss
-        tr_p_obj = tr_p
-        # sample negative links
-        tr_n_ids = np.random.choice(np.arange(n_all_exclusive.shape[0]), tr_p_obj.shape[0] * args.neg_rate)
-        tr_n_obj = n_all_exclusive[tr_n_ids]
-        tr_obj = torch.cat([tr_p_obj, tr_n_obj], dim=0)
-        tr_obj_compound_ids = tr_obj[:, 0]
-        tr_obj_enzyme_ids = tr_obj[:, 1]
-        # forward and compute loss
-        pred_interaction = model(tr_obj_compound_ids, tr_obj_enzyme_ids)
-        loss_interaction = weighted_binary_cross_entropy(pred_interaction, tr_obj[:, -1].reshape([-1, 1]).float())
-
-        # compute multi-task loss
-        # multi-task: fingerprints
-        loss_fp_mf = weighted_binary_cross_entropy(model.predict_fp(torch.arange(num_compound).to(device), mf=True), fp_label)
-        loss_fp_mlp = weighted_binary_cross_entropy(model.predict_fp(torch.arange(num_compound).to(device), mf=False), fp_label)
-        loss_fp = loss_fp_mf + loss_fp_mlp
-
-        # multi-task: ec
-        loss_ec_mf, loss_ec_mlp = 0.0, 0.0
-        ec_loss_w = [1./3., 1./3., 1./3.]
+    for epoch in (range(args.epochs)):
+        model.train()
+        batch_size = 56 # == tr_p / 274
         
-        # TODO: don't hardcode these dimensionalities (they are passed in interaction data already -> just use them)
-        for j, ec_dim in enumerate([(0, 7), (7, 7+25), (7+25, 7+25+23)]):
-            ec_indices = torch.arange(num_enzyme).to(device)
-            ec_label_j = ec_label[:, ec_dim[0]:ec_dim[1]]
-            _, ec_label_j = ec_label_j.max(dim=1)
-            loss_ec_mf += ec_loss_w[j] * torch.nn.CrossEntropyLoss()(model.predict_ec(ec_indices, j, mf=True), ec_label_j)
-            loss_ec_mlp += ec_loss_w[j] * torch.nn.CrossEntropyLoss()(model.predict_ec(ec_indices, j, mf=False), ec_label_j)
-        loss_ec = loss_ec_mf + loss_ec_mlp
+        for bi in range(int(np.ceil(tr_p.shape[0] / batch_size))):
+            start = time.time()
+            # get positive links for this batch
+            indices_s = bi * batch_size
+            indices_e = min(tr_p.shape[0], (bi + 1) * batch_size)
+            tr_p_obj = tr_p[indices_s:indices_e,:]
+            # sample negative links for this batch
+            tr_n_ids = np.random.choice(np.arange(n_all_exclusive.shape[0]), batch_size * args.neg_rate)
+            tr_n_obj = n_all_exclusive[tr_n_ids]
+            # create training data for this batch
+            tr_obj = torch.cat([tr_p_obj, tr_n_obj], dim=0)
+            tr_obj_compound_ids = tr_obj[:, 0]
+            tr_obj_enzyme_ids = tr_obj[:, 1]
+            # forward and compute main-task loss
+            pred_interaction = model(tr_obj_compound_ids, tr_obj_enzyme_ids)
+            loss_interaction = weighted_binary_cross_entropy(pred_interaction, tr_obj[:, -1].reshape([-1, 1]).float())
 
-        # multi-task: rpair
-        loss_rpair = contrastive_loss(rpairs_pos[:, :2], num_compound, fp=True)
+            # compute multi-task loss
+            # multi-task: fingerprints (for compounds in this batch)
+            loss_fp_mf = weighted_binary_cross_entropy(model.predict_fp(tr_obj_compound_ids, mf=True), fp_label[tr_obj_compound_ids])
+            loss_fp_mlp = weighted_binary_cross_entropy(model.predict_fp(tr_obj_compound_ids, mf=False), fp_label[tr_obj_compound_ids])
+            loss_fp = loss_fp_mf + loss_fp_mlp
+            # multi-task: ec (for enzymes in this batch)
+            loss_ec_mf, loss_ec_mlp = 0.0, 0.0
+            ec_loss_w = [1./3., 1./3., 1./3.]
+                    # TODO: don't hardcode these dimensionalities (they are passed in interaction data already -> just use them)
+            for j, ec_dim in enumerate([(0, 7), (7, 7+25), (7+25, 7+25+23)]):
+                ec_label_j = ec_label[tr_obj_enzyme_ids, ec_dim[0]:ec_dim[1]]
+                _, ec_label_j = ec_label_j.max(dim=1) # indexes of the 1s in the 1-hot encodings
+                loss_ec_mf += ec_loss_w[j] * torch.nn.CrossEntropyLoss()(model.predict_ec(tr_obj_enzyme_ids, j, mf=True), ec_label_j)
+                loss_ec_mlp += ec_loss_w[j] * torch.nn.CrossEntropyLoss()(model.predict_ec(tr_obj_enzyme_ids, j, mf=False), ec_label_j)
+            loss_ec = loss_ec_mf + loss_ec_mlp
+            # multi-task: cc_relations (for compounds in this batch)
+            cpd_set_this_batch = set(tr_obj_compound_ids.tolist())
+            mask = torch.tensor([int(cpd) in cpd_set_this_batch for cpd in rpairs_pos[:,0]])
+            relevant_rpairs = rpairs_pos[mask, :2]
+            loss_rpair = contrastive_loss(relevant_rpairs[:, :2], num_compound, fp=True)
+            # multi-task: ko (for enzymes in this batch)     
+                    # BUG: they changed the KO loss from the paper, I think? -> not contrastive!
+                    # TODO: think about what would be an appropriate loss, also considering it's a multi-label problem
+                    # loss_enzyme_ko = contrastive_loss(enzyme_ko, num_enzyme, fp=False)  # never tested
+            loss_ko_mf = weighted_binary_cross_entropy(model.predict_ko(tr_obj_enzyme_ids, mf=True), enzyme_ko_hot[tr_obj_enzyme_ids], weights=[1.0, 1.0])
+            loss_ko_mlp = weighted_binary_cross_entropy(model.predict_ko(tr_obj_enzyme_ids, mf=False), enzyme_ko_hot[tr_obj_enzyme_ids], weights=[1.0, 1.0])
+            loss_enzyme_ko = loss_ko_mf + loss_ko_mlp
+            # total multi-task loss
+            T = 2000
+            w_m = 1.0 if epoch > T else epoch / float(T)
+            w_a = 0.0 if epoch > T else (1 - epoch / float(T))
+            loss = w_m * loss_interaction + w_a * (loss_fp + loss_ec + loss_rpair + loss_enzyme_ko)
 
-        # multi-task: ko        
-        # BUG: they changed the KO loss from the paper, I think? -> not contrastive!
-        # TODO: think about what would be an appropriate loss, also considering it's a multi-label problem
-        # loss_enzyme_ko = contrastive_loss(enzyme_ko, num_enzyme, fp=False) 
-        loss_ko_mf = weighted_binary_cross_entropy(model.predict_ko(torch.arange(num_enzyme).to(device), mf=True), enzyme_ko_hot, weights=[1.0, 1.0])
-        loss_ko_mlp = weighted_binary_cross_entropy(model.predict_ko(torch.arange(num_enzyme).to(device), mf=False), enzyme_ko_hot, weights=[1.0, 1.0])
-        loss_enzyme_ko = loss_ko_mf + loss_ko_mlp
+            # back propagation
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
 
-        # compute training loss with dynamic weighting
-        T = 2000
-        w_m = 1.0 if t > T else t / float(T)
-        w_a = 0.0 if t > T else (1 - t / float(T))
-        loss = w_m * loss_interaction + w_a * (loss_fp + loss_ec + loss_rpair + loss_enzyme_ko)
-
-        # back propagation
-        opt.zero_grad()
-        loss.backward()
-        opt.step()
-
-        if t % args.eval_freq == 0 or t == args.iterations - 1:
-            _, val_map = evaluate(model, va_pn, iteration=t)
-            if val_map > best_valid_map:
-                best_valid_map = val_map
-                best_model_state = copy.deepcopy(model.state_dict())
-
-            # early stop on map
-            val_maps.append(val_map)
-            if len(val_maps) == args.early_stop_window // args.eval_freq:
-                if val_maps[0] > np.max(val_maps[1:]):
-                    break
-                val_maps.pop(0)
+            print(time.time()-start)
         
-        print(t - time.time())
-
-    # testing
+        # evaluate at end of epoch
+        _, val_map = evaluate(model, va_pn, iteration=t)
+        if val_map > best_valid_map:
+            best_valid_map = val_map
+            best_model_state = copy.deepcopy(model.state_dict())
+        # early stop on map
+        val_maps.append(val_map)
+        if len(val_maps) == args.early_stop_window // args.eval_freq:
+            if val_maps[0] > np.max(val_maps[1:]):
+                break
+            val_maps.pop(0)
+    
+    # test at end of training
     model.load_state_dict(best_model_state)
     evaluate(model, te_pn, report_metric_bool=True, iteration=-1, num_compound=num_compound, num_enzyme=num_enzyme)
+
+    # for t in :
+    #     # compute interaction loss
+    #     tr_p_obj = tr_p
+    #     # sample negative links
+    #     tr_n_ids = np.random.choice(np.arange(n_all_exclusive.shape[0]), tr_p_obj.shape[0] * args.neg_rate)
+    #     tr_n_obj = n_all_exclusive[tr_n_ids]
+    #     tr_obj = torch.cat([tr_p_obj, tr_n_obj], dim=0)
+    #     tr_obj_compound_ids = tr_obj[:, 0]
+    #     tr_obj_enzyme_ids = tr_obj[:, 1]
+    #     # forward and compute loss
+    #     pred_interaction = model(tr_obj_compound_ids, tr_obj_enzyme_ids)
+    #     loss_interaction = weighted_binary_cross_entropy(pred_interaction, tr_obj[:, -1].reshape([-1, 1]).float())
+
+    #     # compute multi-task loss
+    #     # multi-task: fingerprints
+    #     loss_fp_mf = weighted_binary_cross_entropy(model.predict_fp(torch.arange(num_compound).to(device), mf=True), fp_label)
+    #     loss_fp_mlp = weighted_binary_cross_entropy(model.predict_fp(torch.arange(num_compound).to(device), mf=False), fp_label)
+    #     loss_fp = loss_fp_mf + loss_fp_mlp
+
+    #     # multi-task: ec
+    #     loss_ec_mf, loss_ec_mlp = 0.0, 0.0
+    #     ec_loss_w = [1./3., 1./3., 1./3.]
+        
+    #     # TODO: don't hardcode these dimensionalities (they are passed in interaction data already -> just use them)
+    #     for j, ec_dim in enumerate([(0, 7), (7, 7+25), (7+25, 7+25+23)]):
+    #         ec_indices = torch.arange(num_enzyme).to(device)
+    #         ec_label_j = ec_label[:, ec_dim[0]:ec_dim[1]]
+    #         _, ec_label_j = ec_label_j.max(dim=1)
+    #         loss_ec_mf += ec_loss_w[j] * torch.nn.CrossEntropyLoss()(model.predict_ec(ec_indices, j, mf=True), ec_label_j)
+    #         loss_ec_mlp += ec_loss_w[j] * torch.nn.CrossEntropyLoss()(model.predict_ec(ec_indices, j, mf=False), ec_label_j)
+    #     loss_ec = loss_ec_mf + loss_ec_mlp
+
+    #     # multi-task: rpair
+    #     loss_rpair = contrastive_loss(rpairs_pos[:, :2], num_compound, fp=True)
+
+    #     # multi-task: ko        
+    #     # BUG: they changed the KO loss from the paper, I think? -> not contrastive!
+    #     # TODO: think about what would be an appropriate loss, also considering it's a multi-label problem
+    #     # loss_enzyme_ko = contrastive_loss(enzyme_ko, num_enzyme, fp=False) 
+    #     loss_ko_mf = weighted_binary_cross_entropy(model.predict_ko(torch.arange(num_enzyme).to(device), mf=True), enzyme_ko_hot, weights=[1.0, 1.0])
+    #     loss_ko_mlp = weighted_binary_cross_entropy(model.predict_ko(torch.arange(num_enzyme).to(device), mf=False), enzyme_ko_hot, weights=[1.0, 1.0])
+    #     loss_enzyme_ko = loss_ko_mf + loss_ko_mlp
+
+    #     # compute training loss with dynamic weighting
+    #     T = 2000
+    #     w_m = 1.0 if t > T else t / float(T)
+    #     w_a = 0.0 if t > T else (1 - t / float(T))
+    #     loss = w_m * loss_interaction + w_a * (loss_fp + loss_ec + loss_rpair + loss_enzyme_ko)
+
+    #     # back propagation
+    #     opt.zero_grad()
+    #     loss.backward()
+    #     opt.step()
+
+    #     if t % args.eval_freq == 0 or t == args.epochs - 1:
+    #         _, val_map = evaluate(model, va_pn, iteration=t)
+    #         if val_map > best_valid_map:
+    #             best_valid_map = val_map
+    #             best_model_state = copy.deepcopy(model.state_dict())
+
+    #         # early stop on map
+    #         val_maps.append(val_map)
+    #         if len(val_maps) == args.early_stop_window // args.eval_freq:
+    #             if val_maps[0] > np.max(val_maps[1:]):
+    #                 break
+    #             val_maps.pop(0)
+        
+    #     print(start - time.time())
+
+    # # testing
+    # model.load_state_dict(best_model_state)
+    # evaluate(model, te_pn, report_metric_bool=True, iteration=-1, num_compound=num_compound, num_enzyme=num_enzyme)
 
 
 def evaluate(model, pn_, report_metric_bool=False, **kwargs):
@@ -275,7 +345,7 @@ def evaluate(model, pn_, report_metric_bool=False, **kwargs):
         zero_pred_map = sk_m.average_precision_score(y_true=true_interaction, y_score=all_zero_pred)
 
         print('Iteration at %d: auc %.3f, map %.3f' % (kwargs['iteration'], te_auc, te_map))
-        print('Compare All-Zero-Prediction: auc %.3f, map %.3f' % (zero_pred_auc, zero_pred_map))
+        print('Compared to All-Zero-Prediction: auc %.3f, map %.3f' % (zero_pred_auc, zero_pred_map))
 
         if report_metric_bool:
             test_rst = report_metric(kwargs['num_compound'], kwargs['num_enzyme'], true_interaction, pred_interaction, pn_.cpu().detach().numpy())
@@ -297,7 +367,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run MLT with NMF.")
     parser.add_argument('--gpu', type=int, default=0)
     # training parameters
-    parser.add_argument('--iterations', type=int, default=350) # change from 3500
+    parser.add_argument('--epochs', type=int, default=350) # changed from 3500
     parser.add_argument('--lr', type=float, default=5e-3)
     parser.add_argument('--l2_reg', type=float, default=1e-6)
     parser.add_argument('--dropout', type=float, default=0.5)
