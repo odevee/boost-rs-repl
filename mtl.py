@@ -203,10 +203,12 @@ def train():
                 loss_ec_mlp += ec_loss_w[j] * torch.nn.CrossEntropyLoss()(model.predict_ec(tr_obj_enzyme_ids, j, mf=False), ec_label_j)
             loss_ec = loss_ec_mf + loss_ec_mlp
             # multi-task: cc_relations (for compounds in this batch)
-            cpd_set_this_batch = set(tr_obj_compound_ids.tolist())
-            mask = torch.tensor([int(cpd) in cpd_set_this_batch for cpd in rpairs_pos[:,0]])
-            relevant_rpairs = rpairs_pos[mask, :2]
-            loss_rpair = contrastive_loss(relevant_rpairs[:, :2], num_compound, fp=True)
+
+            mask = (rpairs_pos[:,0].unsqueeze(1) == tr_obj_compound_ids).any(dim=1)
+            indices = torch.nonzero(mask)[:, 0]
+            relevant_rpairs = rpairs_pos[indices]
+            loss_rpair = contrastive_loss(relevant_rpairs, num_compound, fp=True)
+            
             # multi-task: ko (for enzymes in this batch)     
                     # BUG: they changed the KO loss from the paper, I think? -> not contrastive!
                     # TODO: think about what would be an appropriate loss, also considering it's a multi-label problem
