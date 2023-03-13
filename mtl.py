@@ -1,4 +1,4 @@
-from util import load_interaction_data, load_mt_data, report_metric
+from myutil import load_interaction_data, report_metric
 
 import copy
 import argparse
@@ -53,7 +53,8 @@ class Recommender(torch.nn.Module):
         for ec_dim in [7, 68, 231]:
             self.ec_predictor.append(MLPModel(input_dim=hidden_dim, hidden_dim=hidden_dim, output_dim=ec_dim, dropout=dropout, sigmoid_last_layer=False))
         # multi-task: ko
-        self.ko_predictor = MLPModel(input_dim=hidden_dim, hidden_dim=hidden_dim, output_dim=5575, dropout=dropout, sigmoid_last_layer=True)
+        # TODO: don't harcode this output dimension
+        self.ko_predictor = MLPModel(input_dim=hidden_dim, hidden_dim=hidden_dim, output_dim=8476, dropout=dropout, sigmoid_last_layer=True)
         # MLP co-embedding of enzyme and substrate from input embedding
         self.fc1 = torch.nn.Sequential(
             torch.nn.Linear(hidden_dim * 2, hidden_dim),
@@ -165,6 +166,7 @@ def train():
 
     # train
     for t in (range(args.iterations)):
+        print('ITERATION {}'.format(t))
         model.train()
 
         # compute interaction loss
@@ -188,7 +190,9 @@ def train():
         # multi-task: ec
         loss_ec_mf, loss_ec_mlp = 0.0, 0.0
         ec_loss_w = [1./3., 1./3., 1./3.]
-        for j, ec_dim in enumerate([(0, 7), (7, 7+68), (7+68, 7+68+231)]):
+        
+        # TODO: don't hardcode these dimensionalities (they are passed in interaction data already -> just use them)
+        for j, ec_dim in enumerate([(0, 7), (7, 7+25), (7+25, 7+25+23)]):
             ec_indices = torch.arange(num_enzyme).to(device)
             ec_label_j = ec_label[:, ec_dim[0]:ec_dim[1]]
             _, ec_label_j = ec_label_j.max(dim=1)
@@ -281,7 +285,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run MLT with NMF.")
     parser.add_argument('--gpu', type=int, default=0)
     # training parameters
-    parser.add_argument('--iterations', type=int, default=3500)
+    parser.add_argument('--iterations', type=int, default=350) # change from 3500
     parser.add_argument('--lr', type=float, default=5e-3)
     parser.add_argument('--l2_reg', type=float, default=1e-6)
     parser.add_argument('--dropout', type=float, default=0.5)
@@ -297,8 +301,11 @@ if __name__ == "__main__":
     device = 'cuda:' + str(args.gpu) if torch.cuda.is_available() and args.gpu >= 0 else 'cpu'
 
     # load data
-    tr_p, va_p, te_p, va_pn, te_pn, n_all_exclusive, num_compound, num_enzyme, compound_i2n, enzyme_i2n, fp_label, ec_label = load_interaction_data()
-    rpairs_pos, _, _, enzyme_ko, enzyme_ko_hot, _, _ = load_mt_data()
+    tr_p, va_p, te_p, n_all_exclusive, va_pn, te_pn, num_compound, num_enzyme,\
+        fp_label, ec_label, len_EC_fields, EC_to_hot_dicts, hot_to_EC_dicts, \
+        pos_to_ko_dict,ko_to_pos_dict,num_ko,rpairs_pos,enzyme_ko_hot = load_interaction_data()
+    
+    # tr_p, va_p, te_p, va_pn, te_pn, n_all_exclusive, num_compound, num_enzyme, compound_i2n, enzyme_i2n, fp_label, ec_label = load_interaction_data()
 
     tr_p = tr_p.to(device)
     va_p = va_p.to(device)
@@ -309,7 +316,7 @@ if __name__ == "__main__":
     fp_label = fp_label.to(device)
     ec_label = ec_label.to(device)
     rpairs_pos = rpairs_pos.to(device)
-    enzyme_ko = enzyme_ko.to(device)
+    # enzyme_ko = enzyme_ko.to(device)  # needed for contrastive loss later
     enzyme_ko_hot = enzyme_ko_hot.to(device)
 
     # construct model
@@ -318,5 +325,5 @@ if __name__ == "__main__":
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.l2_reg)
 
-    # start training
+    print('START TRAINING') # start training
     train()

@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
-import random
+import torch
+import pickle
 from rdkit.Chem import MACCSkeys, MolFromMolFile
 from myutil import encode_KOs, encode_EC
 
@@ -155,13 +156,27 @@ ec_ko[0] = ec_ko[0].apply(lambda ec : EC_to_Eid[ec])
 ec_ko[1] = ec_ko[1].apply(lambda kos : encode_KOs(kos, ko_to_pos, num_ko))
 ec_ko.set_index(0)
 
-# TODO: convert arrays to torch
-# TODO: re-write the data-read in functions in myutil
+# convert everything to torch tensors
+tr_interaction_pairs = torch.from_numpy(tr_interaction_pairs.to_numpy())
+va_interaction_pairs = torch.from_numpy(va_interaction_pairs.to_numpy())
+te_interaction_pairs = torch.from_numpy(te_interaction_pairs.to_numpy())
+non_interaction_pairs = torch.from_numpy(non_interaction_pairs.to_numpy())
+fps = torch.from_numpy(np.asarray(list(fps['fingerprint'])))
+EC_table = torch.from_numpy(np.asarray(list(EC_table)))
+cc_pairs = torch.from_numpy(cc_pairs)
+ec_ko = torch.from_numpy(np.asarray(list(ec_ko[1])))
+
+# create validation and test arrays WITH negative examples for AUROC
+# TODO: choose these randomly to not pick specific compounds!!!
+va_pn = torch.cat((va_interaction_pairs, non_interaction_pairs[:4384,:]))
+te_pn = torch.cat((te_interaction_pairs, non_interaction_pairs[-2192:,:]))
 
 interaction_data = { 'tr_p' : tr_interaction_pairs,
                      'va_p' : va_interaction_pairs,
                      'te_p' : te_interaction_pairs,
                      'n_all_exclusive' : non_interaction_pairs,
+                     'va_pn' : va_pn,
+                     'te_pn' : te_pn,
                      'num_compound' : num_compound,
                      'num_enzyme' : num_enzyme,
                      'fp_label' : fps,
@@ -175,12 +190,9 @@ interaction_data = { 'tr_p' : tr_interaction_pairs,
                      'rpairs_pos' : cc_pairs,
                      'enzyme_ko_hot' : ec_ko
 }
-
-# TODO: pickle this data
-
-
-
-
+# dump to file
+with open('./data/interaction.pkl', 'wb') as fi:
+    pickle.dump(interaction_data, fi, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 

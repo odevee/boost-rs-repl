@@ -1,4 +1,3 @@
-# this is a test modification to test git push
 import pickle
 import numpy as np
 import sklearn.metrics as sk_m
@@ -36,10 +35,21 @@ def decode_KOs(vector,pos_to_ko):
 def load_interaction_data():
     with open('./data/interaction.pkl', 'rb') as fi:
         data = pickle.load(fi)
-    tr_p, va_p, te_p, n_all_exclusive, num_compound, num_enzyme, fp_label, ec_label = \
-                                                            data['tr_p'], data['va_p'], data['te_p'], data['n_all_exclusive'],\
-                                                            data['num_compound'], data['num_enzyme'], data['fp_label'], data['ec_label']
-    return tr_p, va_p, te_p, n_all_exclusive, num_compound, num_enzyme, fp_label, ec_label
+    tr_p, va_p, te_p, n_all_exclusive, va_pn, te_pn, \
+    num_compound,\
+    num_enzyme, fp_label, ec_label,len_EC_fields,\
+    EC_to_hot_dicts,hot_to_EC_dicts,pos_to_ko_dict,\
+    ko_to_pos_dict,num_ko,rpairs_pos,enzyme_ko_hot = \
+                data['tr_p'], data['va_p'], data['te_p'], data['n_all_exclusive'],\
+                data['va_pn'], data['te_pn'],\
+                data['num_compound'], data['num_enzyme'], data['fp_label'], data['ec_label'],\
+                data['len_EC_fields'],data['EC_to_hot_dicts'],data['hot_to_EC_dicts'],\
+                data['pos_to_ko_dict'],data['ko_to_pos_dict'], data['num_ko'], data['rpairs_pos'],\
+                data['enzyme_ko_hot']
+    
+    return tr_p, va_p, te_p, n_all_exclusive, va_pn, te_pn, num_compound, num_enzyme,\
+        fp_label, ec_label, len_EC_fields, EC_to_hot_dicts, hot_to_EC_dicts, \
+        pos_to_ko_dict,ko_to_pos_dict,num_ko,rpairs_pos,enzyme_ko_hot
 
 # def legacy_load_mt_data():
 #     with open('./data/auxiliary.pkl', 'rb') as fi:
@@ -48,11 +58,11 @@ def load_interaction_data():
 #                                           data['enzyme_ko'], data['enzyme_ko_hot'], data['enzyme_module'], data['enzyme_pathway']
 #     return rpairs_pos, cpd_module, cpd_pathway, enzyme_ko, enzyme_ko_hot, enzyme_module, enzyme_pathway
 
-def load_mt_data():
-    with open('./data/auxiliary.pkl', 'rb') as fi:
-        data = pickle.load(fi)
-    rpairs_pos, enzyme_ko, enzyme_ko_hot = data['rpairs_pos'], data['enzyme_ko'], data['enzyme_ko_hot']
-    return rpairs_pos, enzyme_ko, enzyme_ko_hot
+# def load_mt_data():
+#     with open('./data/auxiliary.pkl', 'rb') as fi:
+#         data = pickle.load(fi)
+#     rpairs_pos, enzyme_ko, enzyme_ko_hot = data['rpairs_pos'], data['enzyme_ko'], data['enzyme_ko_hot']
+#     return rpairs_pos, enzyme_ko, enzyme_ko_hot
 
 
 def report_metric(num_compound, num_enzyme, true_interaction, pred_interaction, te_pn):
