@@ -50,7 +50,7 @@ class Recommender(torch.nn.Module):
         self.fp_predictor = MLPModel(input_dim=hidden_dim, hidden_dim=hidden_dim, output_dim=167, dropout=dropout, sigmoid_last_layer=True)
         # multi-task: ec
         self.ec_predictor = torch.nn.ModuleList()
-        for ec_dim in [7, 68, 231]:
+        for ec_dim in [7, 68, 231]: # TODO: fix these numbers, I thiink?; aslo why sigmoid=False?
             self.ec_predictor.append(MLPModel(input_dim=hidden_dim, hidden_dim=hidden_dim, output_dim=ec_dim, dropout=dropout, sigmoid_last_layer=False))
         # multi-task: ko
         # TODO: don't harcode this output dimension
@@ -133,7 +133,7 @@ class Recommender(torch.nn.Module):
 
 
 def weighted_binary_cross_entropy(output, target, weights=None):
-    output = torch.clamp(output, 1e-6, 1.0 - 1e-6)
+    output = torch.clamp(output, 1e-6, 1.0 - 1e-6) # TODO: ?
 
     if weights is not None:
         assert len(weights) == 2
@@ -258,12 +258,17 @@ def evaluate(model, pn_, report_metric_bool=False, **kwargs):
         # convert ground truth and prediction to numpy
         true_interaction = pn_[:, -1].reshape([-1, 1]).float().cpu().detach().numpy().reshape(-1)
         pred_interaction = pred_interaction.cpu().detach().numpy().reshape(-1)
-
+        all_zero_pred = torch.zeros_like(pn_[:, -1].reshape([-1, 1])).float().cpu().detach().numpy().reshape(-1)
+    
         # report metrics for evaluation
         te_auc = roc_auc_score(y_true=true_interaction, y_score=pred_interaction)
         te_map = sk_m.average_precision_score(y_true=true_interaction, y_score=pred_interaction)
 
+        zero_pred_auc = roc_auc_score(y_true=true_interaction, y_score=all_zero_pred)
+        zero_pred_map = sk_m.average_precision_score(y_true=true_interaction, y_score=all_zero_pred)
+
         print('Iteration at %d: auc %.3f, map %.3f' % (kwargs['iteration'], te_auc, te_map))
+        print('Compare All-Zero-Prediction: auc %.3f, map %.3f' % (zero_pred_auc, zero_pred_map))
 
         if report_metric_bool:
             test_rst = report_metric(kwargs['num_compound'], kwargs['num_enzyme'], true_interaction, pred_interaction, pn_.cpu().detach().numpy())
