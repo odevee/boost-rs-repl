@@ -8,6 +8,8 @@ import sklearn.metrics as sk_m
 import torch
 import torch.nn.functional as F
 
+import time
+
 
 class MLPModel(torch.nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, dropout, sigmoid_last_layer=False):
@@ -165,9 +167,12 @@ def train():
     best_model_state = None
 
     # train
+    model.train() # TODO : ?
     for t in (range(args.iterations)):
+        t = time.time()
+        print(t)
         print('ITERATION {}'.format(t))
-        model.train()
+        # model.train()
 
         # compute interaction loss
         tr_p_obj = tr_p
@@ -234,6 +239,8 @@ def train():
                 if val_maps[0] > np.max(val_maps[1:]):
                     break
                 val_maps.pop(0)
+        
+        print(t - time.time())
 
     # testing
     model.load_state_dict(best_model_state)
