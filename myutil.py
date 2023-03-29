@@ -1,6 +1,9 @@
+import torch
 import pickle
 import numpy as np
 import sklearn.metrics as sk_m
+from torch.utils.data import Dataset
+import time
 
 def encode_EC(EC_NUMBER, conversion_dictionaries):
     ECa_to_hot, ECb_to_hot, ECc_to_hot = conversion_dictionaries
@@ -32,24 +35,55 @@ def decode_KOs(vector,pos_to_ko):
 #                                      data['num_compound'], data['num_enzyme'], data['compound_i2n'], data['enzyme_i2n'], data['fp_label'], data['ec_label']
 #     return tr_p, va_p, te_p, va_pn, te_pn, n_all_exclusive, num_compound, num_enzyme, compound_i2n, enzyme_i2n, fp_label, ec_label
 
-def load_interaction_data():
+def first_load_interaction_data():
     with open('./data/interaction.pkl', 'rb') as fi:
         data = pickle.load(fi)
-    tr_p, va_p, te_p, n_all_exclusive, va_pn, te_pn, \
-    num_compound,\
-    num_enzyme, fp_label, ec_label,len_EC_fields,\
-    EC_to_hot_dicts,hot_to_EC_dicts,pos_to_ko_dict,\
-    ko_to_pos_dict,num_ko,rpairs_pos,enzyme_ko_hot = \
-                data['tr_p'], data['va_p'], data['te_p'], data['n_all_exclusive'],\
-                data['va_pn'], data['te_pn'],\
-                data['num_compound'], data['num_enzyme'], data['fp_label'], data['ec_label'],\
-                data['len_EC_fields'],data['EC_to_hot_dicts'],data['hot_to_EC_dicts'],\
-                data['pos_to_ko_dict'],data['ko_to_pos_dict'], data['num_ko'], data['rpairs_pos'],\
-                data['enzyme_ko_hot']
+
+        tr_p               = data['tr_p']
+        va_p               = data['va_p']                  # TODO: where need these?
+        te_p               = data['te_p']                  # TODO: where need this?
+        n_all_exclusive    = data['n_all_exclusive']
+        va_pn              = data['va_pn']
+        te_pn              = data['te_pn']
+        num_compound       = data['num_compound']
+        num_enzyme         = data['num_enzyme']
+        fp_label           = data['fp_label']
+        ec_label           = data['ec_label']
+        len_EC_fields      = data['len_EC_fields']
+        EC_to_hot_dicts    = data['EC_to_hot_dicts']
+        hot_to_EC_dicts    = data['hot_to_EC_dicts']
+        pos_to_ko_dict     = data['pos_to_ko_dict']
+        ko_to_pos_dict     = data['ko_to_pos_dict']
+        num_ko             = data['num_ko']
+        rpairs_pos         = data['rpairs_pos']
+        enzyme_ko_hot      = data['enzyme_ko_hot']
     
     return tr_p, va_p, te_p, n_all_exclusive, va_pn, te_pn, num_compound, num_enzyme,\
         fp_label, ec_label, len_EC_fields, EC_to_hot_dicts, hot_to_EC_dicts, \
         pos_to_ko_dict,ko_to_pos_dict,num_ko,rpairs_pos,enzyme_ko_hot
+
+def load_interaction_data():
+    with open('./data/interaction.pkl', 'rb') as fi:
+        data = pickle.load(fi)
+
+        pairs              = data['pairs']
+        num_compound       = data['num_compound']
+        num_enzyme         = data['num_enzyme']
+        fp_label           = data['fp_label']
+        ec_label           = data['ec_label']
+        len_EC_fields      = data['len_EC_fields']
+        EC_to_hot_dicts    = data['EC_to_hot_dicts']
+        hot_to_EC_dicts    = data['hot_to_EC_dicts']
+        pos_to_ko_dict     = data['pos_to_ko_dict']
+        ko_to_pos_dict     = data['ko_to_pos_dict']
+        num_ko             = data['num_ko']
+        rpairs_pos         = data['rpairs_pos']         # TODO: I don't think needed any more
+        CC_dict            = data['CC_dict']
+        enzyme_ko_hot      = data['enzyme_ko_hot']
+    
+    return pairs, num_compound, num_enzyme,\
+        fp_label, ec_label, len_EC_fields, EC_to_hot_dicts, hot_to_EC_dicts, \
+        pos_to_ko_dict,ko_to_pos_dict,num_ko,rpairs_pos,CC_dict,enzyme_ko_hot
 
 # def legacy_load_mt_data():
 #     with open('./data/auxiliary.pkl', 'rb') as fi:
@@ -64,6 +98,134 @@ def load_interaction_data():
 #     rpairs_pos, enzyme_ko, enzyme_ko_hot = data['rpairs_pos'], data['enzyme_ko'], data['enzyme_ko_hot']
 #     return rpairs_pos, enzyme_ko, enzyme_ko_hot
 
+# TODO: IMPLEMENT THIS AS A FLAG INSTEAD OF TWO DIFFERENT CLASSES (if train or testset I mean)
+class TrainDataset(Dataset):
+    # apart from interactions, also samples CC (anchor, pos, neg) triplets
+    def __init__(self, data, CC_dict, num_compound, device):
+        self.data = data            # compound enzyme {0,1}
+        self.CC = CC_dict           # anchor : {positive1, positive2} (have cc relation)
+        self.num_cpd = num_compound # total number of compounds in dataset
+        self.device = device
+
+    def __len__(self):
+        return self.data.shape[0]
+    
+    def __getitem__(self, index):
+        es_interaction = self.data[index].unsqueeze(0)
+        # TODO: check syntax now that just single point
+        compound_id = es_interaction[:,0].to(self.device)
+        enzyme_id   = es_interaction[:,1].to(self.device)
+        # get all (anchor, positive) cc relations for this compound
+        # NOTE: the original had 25x the positive samples and 25x sampled negative ones
+        positives = torch.Tensor(list(self.CC[int(compound_id)]))
+        anchors = torch.Tensor(np.repeat(int(compound_id), len(positives)))
+        negatives = torch.from_numpy(np.random.choice(np.arange(self.num_cpd), len(positives)))
+        triplets = torch.stack([anchors, positives, negatives], dim=1).long().to(self.device)
+        return es_interaction, compound_id, enzyme_id, triplets
+
+class TrainDatasetPairTable(Dataset):
+    # apart from interactions, also samples CC (anchor, pos, neg) triplets
+    # old implementation without hash table
+    def __init__(self, data, rpairs, num_compound, device):
+        self.data = data            # compound enzyme {0,1}
+        self.rpairs = rpairs        # anchor positive (have cc relation)
+        self.num_cpd = num_compound # total number of compounds in dataset
+        self.device = device
+
+    def __len__(self):
+        return self.data.shape[0]
+    
+    def __getitem__(self, index):
+        es_interaction = self.data[index].unsqueeze(0)
+        # TODO: check syntax now that just single point
+        compound_id = es_interaction[:,0].to(self.device)
+        enzyme_id   = es_interaction[:,1].to(self.device)
+        # get all (anchor, positive) cc relations for this compound
+        # TODO: re-implement with hash table
+        mask = (self.rpairs[:,0].unsqueeze(1) == compound_id).any(dim=1)
+        indices = torch.nonzero(mask)[:, 0]
+        relevant_rpairs = self.rpairs[indices]
+        # sample a (negative) counterpart compound for each -> (anchor pos neg)
+        # NOTE: the original had 25x the positive samples and 25x sampled negative ones
+        negs = np.random.choice(np.arange(self.num_cpd), relevant_rpairs.shape[0])
+        negs = torch.LongTensor(negs).unsqueeze(-1)
+        triplets = torch.cat((relevant_rpairs, negs), dim=-1).to(self.device)
+        return es_interaction, compound_id, enzyme_id, triplets
+    
+class TestDataset(Dataset):
+    # does not return CC triplets
+    def __init__(self, data, device):
+        self.data = data            # compound enzyme {0,1}
+        self.device = device
+
+    def __len__(self):
+        return self.data.shape[0]
+    
+    def __getitem__(self, index):
+        es_interaction = self.data[index].unsqueeze(0)
+        # TODO: check syntax now that just single point
+        compound_id = es_interaction[:,0].to(self.device)
+        enzyme_id   = es_interaction[:,1].to(self.device)
+        return es_interaction, compound_id, enzyme_id
+
+
+# old custom dataset with active negative sampling of es-interactions
+class CustomDatasetSample(Dataset):
+    def __init__(self, data, neg_data, rpairs, num_compound, neg_rate, device):
+        self.data = data            # compound enzyme 1
+        self.neg_data = neg_data    # compound enzyme 0
+        self.rpairs = rpairs        # anchor positive (have cc relation)
+        self.neg_rate = neg_rate    # ratio neg / pos enzyme-substr interactions
+        self.num_cpd = num_compound # total number of compounds in dataset
+        self.device = device
+
+    def __len__(self):
+        return self.data.shape[0]
+
+    def __getitem__(self, index):
+        # get one positive enzyme-substrate interaction
+        pos_interaction = self.data[index].unsqueeze(0)
+        # sample several (assumed) negative ones
+        neg_index = np.random.choice(np.arange(self.neg_data.shape[0]), pos_interaction.shape[0]*self.neg_rate)
+        neg_interactions = self.neg_data[neg_index]
+        # create data object
+        obj = torch.cat([pos_interaction, neg_interactions], dim=0).to(self.device)
+        obj_compound_ids = obj[:, 0].to(self.device)
+        obj_enzyme_ids = obj[:, 1].to(self.device)
+        # also get all (anchor, positive) cc relations for the compounds involved
+        mask = (self.rpairs[:,0].unsqueeze(1) == obj_compound_ids).any(dim=1)
+        indices = torch.nonzero(mask)[:, 0]
+        relevant_rpairs = self.rpairs[indices]
+        # and sample a (negative) counterpart compound for each -> (anchor pos neg)
+        # NOTE: the original had 25x the positive samples and 25x sampled negative ones
+        negs = np.random.choice(np.arange(self.num_cpd), relevant_rpairs.shape[0])
+        negs = torch.LongTensor(negs).unsqueeze(-1)
+        triplets = torch.cat((relevant_rpairs, negs), dim=-1).to(self.device)
+        return obj, obj_compound_ids, obj_enzyme_ids, triplets
+        
+def custom_collate_triplets(batch):
+    obj, obj_compound_ids, obj_enzyme_ids, triplets = [], [], [], []
+    for (obj_, obj_compound_ids_, obj_enzyme_ids_, triplets_) in batch:
+        obj.append(obj_)
+        obj_compound_ids.append(obj_compound_ids_)
+        obj_enzyme_ids.append(obj_enzyme_ids_)
+        triplets.append(triplets_)
+    obj = torch.cat(obj, dim=0)
+    obj_compound_ids = torch.cat(obj_compound_ids, dim=0)
+    obj_enzyme_ids = torch.cat(obj_enzyme_ids, dim=0)
+    triplets = torch.cat(triplets, dim=0)
+    return obj, obj_compound_ids, obj_enzyme_ids, triplets 
+
+def custom_collate_no_triplets(batch):
+    obj, obj_compound_ids, obj_enzyme_ids, = [], [], []
+    for (obj_, obj_compound_ids_, obj_enzyme_ids_) in batch:
+        obj.append(obj_)
+        obj_compound_ids.append(obj_compound_ids_)
+        obj_enzyme_ids.append(obj_enzyme_ids_)
+    obj = torch.cat(obj, dim=0)
+    obj_compound_ids = torch.cat(obj_compound_ids, dim=0)
+    obj_enzyme_ids = torch.cat(obj_enzyme_ids, dim=0)
+    return obj, obj_compound_ids, obj_enzyme_ids 
 
 def report_metric(num_compound, num_enzyme, true_interaction, pred_interaction, te_pn):
     metric = {}
